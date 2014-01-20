@@ -1,20 +1,30 @@
 #ifndef SPTR_H
 #define SPTR_H
 
+#include <atomic>
+
 template<typename T>
 class sptr_helper {
 private:
     T *m_target;
-    int m_scount;
-    int m_wcount;
+    std::atomic_int m_scount;
+    //int m_scount;
+    std::atomic_int m_wcount;
 public:
     sptr_helper(T *target) : m_target(target), m_scount(1), m_wcount(0) {}
 
     T *target() const { return m_target; }
 
-    // need to do atomic increment here to be threadsafe
-    void incs() { if(m_scount > 0) m_scount ++; }
-    void incw() { m_wcount ++ ; }
+    bool incs() {
+        while(true) {
+            int v = m_scount;
+
+            if(v == 0) return false;
+
+            if(m_scount.compare_exchange_strong(v, v+1, std::memory_order_relaxed, std::memory_order_relaxed)) return true;
+        }
+    }
+    void incw() { m_wcount ++; }
 
     void decs() { m_scount --; check(); }
     void decw() { m_wcount --; check(); }
@@ -24,17 +34,11 @@ public:
     }
 
     bool check() {
-        if(m_scount < 0) {
-            std::cout << "negative scount!" << std::endl;
-        }
-        if(m_wcount < 0) {
-            std::cout << "negative wcount!" << std::endl;
-        }
-        if(m_target && m_scount == 0) {
+        if(m_target && m_scount <= 0) {
             delete m_target;
             m_target = 0;
         }
-        if(m_scount == 0 && m_wcount == 0) return false;
+        if(m_scount <= 0 && m_wcount == 0) return false;
         return true;
     }
 };
@@ -57,7 +61,7 @@ public:
     }
     sptr(sptr_helper<T> *helper) {
         m_helper = helper;
-        if(m_helper) m_helper->incs();
+        if(m_helper && !m_helper->incs()) m_helper = 0;
     }
     sptr(T *object) {
         *this = make(object);
